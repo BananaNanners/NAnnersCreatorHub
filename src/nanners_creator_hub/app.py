@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .media import MediaProbeError, inspect_media, inspect_reference
 from .projects import load_project, new_project, save_project
+from .readiness import analyze_project, export_report
 from .sections import STATUSES, new_section, section_warnings, suggest_footage
 
 
@@ -55,6 +56,8 @@ class MainWindow(QMainWindow):
             ("Save Project", self.save_current),
             ("Import Media", self.import_media),
             ("Rescan Media", self.rescan_media),
+            ("Readiness Report", self.show_readiness_report),
+            ("Export Report", self.export_readiness_report),
         ):
             btn = QPushButton(text)
             btn.clicked.connect(action)
@@ -164,6 +167,50 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.status_label)
         self.setCentralWidget(container)
         self.show_section(-1)
+
+    def show_readiness_report(self) -> None:
+        if self.project is None:
+            QMessageBox.information(self, "No project", "Create or open a project first.")
+            return
+        analysis = analyze_project(self.project)
+        rows = [
+            f"{i:02}. {item['title']}: "
+            f"{'Ready' if item['ready'] else 'Needs review'} "
+            f"({len(item['issues'])} issue(s))"
+            for i, item in enumerate(analysis["sections"], 1)
+        ]
+        summary = (
+            f"{analysis['section_count']} sections, "
+            f"{analysis['ready_count']} ready, "
+            f"{analysis['review_count']} needing review.\n\n"
+            + ("\n".join(rows) if rows else "No sections added yet.")
+            + "\n\nExport a Markdown report for detailed timing and review notes."
+        )
+        QMessageBox.information(self, "Editing Readiness", summary)
+
+    def export_readiness_report(self) -> None:
+        if self.project is None:
+            QMessageBox.information(self, "No project", "Create or open a project first.")
+            return
+        default_dir = self.project_path.parent if self.project_path else Path.home()
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Export Editing Readiness",
+            str(default_dir / "editing-readiness.md"), "Markdown report (*.md)"
+        )
+        if not filename:
+            return
+        target = Path(filename)
+        if target.suffix.lower() != ".md":
+            target = target.with_suffix(".md")
+        if target.exists():
+            QMessageBox.warning(self, "Report exists", "Select a new report filename. Existing files are never overwritten.")
+            return
+        try:
+            export_report(target, self.project)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+            return
+        self.status_label.setText(f"Report exported: {target}")
 
     def mark_dirty(self) -> None:
         self.dirty = True
