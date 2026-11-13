@@ -6,3 +6,7 @@ __pycache__/
 build/
 dist/
 *.tmp
+# Local user projects and generated outputs (keep outside source checkpoints)
+/tutorial.json
+/editing-readiness*.md
+/kdenlive-section-markers*.json

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanners-creator-hub"
-version = "0.1.0.dev4"
+version = "0.1.0.dev5"
 description = "Local-first YouTube tutorial production assistant"
 requires-python = ">=3.11"
 dependencies = ["PySide6>=6.6"]
