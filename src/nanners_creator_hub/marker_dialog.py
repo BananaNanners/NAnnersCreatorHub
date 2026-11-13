@@ -4,9 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 import os
 
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout,
-    QLabel, QMessageBox, QPushButton, QSpinBox, QTextEdit,
+    QApplication, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
+    QHBoxLayout, QLabel, QMessageBox, QPushButton, QSpinBox, QTextEdit,
     QVBoxLayout,
 )
 
@@ -77,6 +78,12 @@ class MarkerExportDialog(QDialog):
         self.start_frame_box.setValue(0)
         form.addRow("First timeline frame", self.start_frame_box)
         layout.addLayout(form)
+        self.warning_banner, self.warning_label = self.make_banner("fpsMismatchBanner", "warning")
+        self.error_banner, self.error_label = self.make_banner("exportErrorBanner", "error")
+        layout.addWidget(self.warning_banner)
+        layout.addWidget(self.error_banner)
+        self.warning_banner.hide()
+        self.error_banner.hide()
         self.explanation = QLabel(
             "Marker positions are rounded to whole frames; "
             "footage in/out points refer to source ranges, not Kdenlive timeline positions. "
@@ -102,6 +109,35 @@ class MarkerExportDialog(QDialog):
         self.start_frame_box.valueChanged.connect(self.update_preview)
         self.update_preview()
 
+    @staticmethod
+    def make_banner(object_name: str, severity: str) -> tuple[QFrame, QLabel]:
+        """High-contrast alert banners for both dark and light Qt palettes."""
+        window = QApplication.palette().color(QPalette.ColorRole.Window)
+        dark = window.lightness() < 128
+        if severity == "warning":
+            bg, border, ink = (
+                ("#49340e", "#e9ae35", "#ffedbe") if dark
+                else ("#fff2c6", "#ad6a00", "#513500")
+            )
+        else:
+            bg, border, ink = (
+                ("#4b2025", "#f17b83", "#ffe2e4") if dark
+                else ("#ffe3e3", "#b32230", "#600d16")
+            )
+        frame = QFrame()
+        frame.setObjectName(object_name)
+        frame.setStyleSheet(
+            f"QFrame#{object_name} {{background: {bg}; border: 2px solid {border}; "
+            "border-radius: 8px;}"
+        )
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(12, 10, 12, 10)
+        label = QLabel()
+        label.setWordWrap(True)
+        label.setStyleSheet(f"color: {ink}; background: transparent; font-weight: 600;")
+        row.addWidget(label)
+        return frame, label
+
     def plan_args(self) -> dict:
         return {
             "fps_name": self.fps_box.currentText(),
@@ -110,12 +146,27 @@ class MarkerExportDialog(QDialog):
         }
 
     def update_preview(self) -> None:
+        mismatched = bool(
+            self.kdenlive_fps_preference
+            and self.fps_box.currentText() != self.kdenlive_fps_preference
+        )
+        self.warning_banner.setVisible(mismatched)
+        if mismatched:
+            self.warning_label.setText(
+                f"⚠ FRAME-RATE MISMATCH — Selected {self.fps_box.currentText()} FPS, "
+                f"Kdenlive saved preference {self.kdenlive_fps_preference} FPS. "
+                "Markers may appear at incorrect times. Check the open project's "
+                "actual FPS in Project Settings before exporting."
+            )
         try:
             plan = marker_plan(self.project, **self.plan_args())
         except (MarkerPlanError, ValueError) as exc:
             self.preview.setPlainText(f"Cannot export yet:\n{exc}")
+            self.error_label.setText(f"⛔ CANNOT EXPORT — {exc}")
+            self.error_banner.show()
             self.export_button.setEnabled(False)
             return
+        self.error_banner.hide()
         self.export_button.setEnabled(True)
         fps = FRAME_RATES[self.fps_box.currentText()]
         lines = [f"{len(plan)} marker(s) — positions are Kdenlive timeline frames", ""]
