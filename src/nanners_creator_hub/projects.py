@@ -7,6 +7,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .sections import validate_section
+
 SCHEMA_VERSION = 1
 
 
@@ -40,6 +42,12 @@ def validate_project(data: dict) -> None:
         raise ValueError("Original-media preservation must remain enabled")
     if not isinstance(data.get("sections"), list):
         raise ValueError("Sections must be a list")
+    ids = set()
+    for section in data["sections"]:
+        validate_section(section)
+        if section["id"] in ids:
+            raise ValueError("Duplicate section IDs")
+        ids.add(section["id"])
     media = data.get("media", [])
     if not isinstance(media, list):
         raise ValueError("Media must be a list")

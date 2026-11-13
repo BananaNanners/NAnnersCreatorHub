@@ -53,7 +53,10 @@ class ProjectPersistenceTests(unittest.TestCase):
             source.write_bytes(b"example recording content")
             before = source.read_bytes()
             project = new_project("Safe")
-            project["sections"] = [{"source_path": str(source)}]
+            from nanners_creator_hub.sections import new_section
+            section = new_section("Source preservation")
+            section["footage_path"] = str(source)
+            project["sections"] = [section]
             save_project(Path(folder) / "project.json", project)
             self.assertEqual(source.read_bytes(), before)
 

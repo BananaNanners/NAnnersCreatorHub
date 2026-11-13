@@ -1,19 +1,23 @@
-"""Single-window PySide6 application for milestone dev2."""
+"""Single-window assisted section editor — dev3."""
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QMessageBox, QPushButton, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QMainWindow,
+    QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
+    QTextEdit, QVBoxLayout, QWidget,
 )
 
 from . import __version__
 from .media import MediaProbeError, inspect_media, inspect_reference
 from .projects import load_project, new_project, save_project
+from .sections import STATUSES, new_section, section_warnings, suggest_footage
 
 
 def duration_display(seconds: float | None) -> str:
@@ -30,74 +34,189 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"NAnners Creator Hub — {__version__}")
-        self.resize(1060, 650)
+        self.resize(1160, 780)
         self.project: dict | None = None
         self.project_path: Path | None = None
-        container = QWidget(self)
+        self.dirty = False
+        self.loading = False
+
+        container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(8)
         title = QLabel("NAnners Creator Hub")
-        title.setStyleSheet("font-size: 27px; font-weight: 700;")
+        title.setStyleSheet("font-size: 24px; font-weight: 700;")
         layout.addWidget(title)
-        layout.addWidget(QLabel(
-            "Assisted Editing  •  Originals preserved  •  Section markers enabled"
-        ))
+        layout.addWidget(QLabel("Assisted Editing • Originals preserved • Section markers enabled"))
         controls = QHBoxLayout()
-        for caption, action in (
+        for text, action in (
             ("New Project", self.create_project),
             ("Open Project", self.open_project),
             ("Save Project", self.save_current),
+            ("Import Media", self.import_media),
+            ("Rescan Media", self.rescan_media),
         ):
-            button = QPushButton(caption)
-            button.clicked.connect(action)
-            controls.addWidget(button)
-        controls.addStretch()
+            btn = QPushButton(text)
+            btn.clicked.connect(action)
+            controls.addWidget(btn)
         layout.addLayout(controls)
-        layout.addWidget(QLabel("Project name"))
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("Create or open a project to get started")
-        self.name_edit.textChanged.connect(self.update_name)
+        self.name_edit.setPlaceholderText("Project name")
+        self.name_edit.textEdited.connect(self.change_project_name)
         layout.addWidget(self.name_edit)
-
-        media_controls = QHBoxLayout()
-        media_controls.addWidget(QLabel("Media library — referenced files (read-only)"))
-        media_controls.addStretch()
-        import_button = QPushButton("Import Media")
-        import_button.clicked.connect(self.import_media)
-        media_controls.addWidget(import_button)
-        scan_button = QPushButton("Rescan Media")
-        scan_button.clicked.connect(self.rescan_media)
-        media_controls.addWidget(scan_button)
-        layout.addLayout(media_controls)
         self.media_table = QTableWidget(0, 7)
         self.media_table.setHorizontalHeaderLabels(
             ["Filename", "Type", "Duration", "Resolution", "FPS", "Codecs", "Status"]
         )
         self.media_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.media_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.media_table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.media_table, 1)
-        self.status_label = QLabel("No project loaded. Original recordings are never modified.")
-        self.status_label.setWordWrap(True)
+        layout.addWidget(self.media_table, 2)
+
+        editing = QSplitter(Qt.Orientation.Horizontal)
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.addWidget(QLabel("Tutorial sections"))
+        self.section_list = QListWidget()
+        self.section_list.currentRowChanged.connect(self.show_section)
+        left_layout.addWidget(self.section_list)
+        left_buttons = QHBoxLayout()
+        add = QPushButton("Add Section")
+        add.clicked.connect(self.add_section)
+        remove = QPushButton("Remove")
+        remove.clicked.connect(self.remove_section)
+        up = QPushButton("Move Up")
+        up.clicked.connect(lambda: self.move_section(-1))
+        down = QPushButton("Move Down")
+        down.clicked.connect(lambda: self.move_section(1))
+        for btn in (add, remove, up, down):
+            left_buttons.addWidget(btn)
+        left_layout.addLayout(left_buttons)
+        editing.addWidget(left)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        form = QFormLayout()
+        self.section_title = QLineEdit()
+        self.section_title.textEdited.connect(lambda val: self.edit_section("title", val))
+        form.addRow("Section title", self.section_title)
+        self.narration_combo = QComboBox()
+        self.narration_combo.currentIndexChanged.connect(
+            lambda _: self.edit_section("narration_path", self.narration_combo.currentData() or "")
+        )
+        narration_row = QHBoxLayout()
+        narration_row.addWidget(self.narration_combo)
+        play_narration = QPushButton("Open Audio")
+        play_narration.clicked.connect(lambda: self.open_assigned_media("narration_path"))
+        narration_row.addWidget(play_narration)
+        form.addRow("Narration", narration_row)
+        footage_row = QHBoxLayout()
+        self.footage_combo = QComboBox()
+        self.footage_combo.currentIndexChanged.connect(
+            lambda _: self.edit_section("footage_path", self.footage_combo.currentData() or "")
+        )
+        footage_row.addWidget(self.footage_combo)
+        open_footage = QPushButton("Open Footage")
+        open_footage.clicked.connect(lambda: self.open_assigned_media("footage_path"))
+        footage_row.addWidget(open_footage)
+        suggest = QPushButton("Suggest")
+        suggest.clicked.connect(self.suggest_match)
+        footage_row.addWidget(suggest)
+        form.addRow("Footage", footage_row)
+        self.in_point = QDoubleSpinBox()
+        self.out_point = QDoubleSpinBox()
+        for field, widget in (("footage_in_seconds", self.in_point), ("footage_out_seconds", self.out_point)):
+            widget.setRange(0, 86400)
+            widget.setDecimals(3)
+            widget.setSuffix(" s")
+            widget.valueChanged.connect(lambda val, f=field: self.edit_section(f, val))
+        form.addRow("In point", self.in_point)
+        form.addRow("Out point", self.out_point)
+        self.state_combo = QComboBox()
+        for status in STATUSES:
+            self.state_combo.addItem(status.replace("_", " ").title(), status)
+        self.state_combo.currentIndexChanged.connect(
+            lambda _: self.edit_section("status", self.state_combo.currentData())
+        )
+        form.addRow("Review status", self.state_combo)
+        right_layout.addLayout(form)
+        right_layout.addWidget(QLabel("Script"))
+        self.script_edit = QTextEdit()
+        self.script_edit.setPlaceholderText("Paste narration script for this section")
+        self.script_edit.textChanged.connect(
+            lambda: self.edit_section("script", self.script_edit.toPlainText())
+        )
+        right_layout.addWidget(self.script_edit, 2)
+        right_layout.addWidget(QLabel("Review notes"))
+        self.notes_edit = QTextEdit()
+        self.notes_edit.setMaximumHeight(85)
+        self.notes_edit.textChanged.connect(
+            lambda: self.edit_section("notes", self.notes_edit.toPlainText())
+        )
+        right_layout.addWidget(self.notes_edit)
+        self.warnings = QLabel("Select a section")
+        self.warnings.setWordWrap(True)
+        right_layout.addWidget(self.warnings)
+        editing.addWidget(right)
+        editing.setStretchFactor(0, 2)
+        editing.setStretchFactor(1, 3)
+        layout.addWidget(editing, 5)
+        self.status_label = QLabel("Create or open a project to begin.")
         layout.addWidget(self.status_label)
         self.setCentralWidget(container)
+        self.show_section(-1)
 
-    def update_name(self, name: str) -> None:
+    def mark_dirty(self) -> None:
+        self.dirty = True
+        self.setWindowModified(True)
+
+    def mark_clean(self) -> None:
+        self.dirty = False
+        self.setWindowModified(False)
+
+    def check_discard(self) -> bool:
+        if not self.dirty:
+            return True
+        choice = QMessageBox.question(
+            self, "Unsaved changes",
+            "This project has unsaved changes. Discard them?",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return choice == QMessageBox.StandardButton.Discard
+
+    def closeEvent(self, event) -> None:
+        if self.check_discard():
+            event.accept()
+        else:
+            event.ignore()
+
+    def change_project_name(self, value: str) -> None:
         if self.project is not None:
-            self.project["name"] = name
+            self.project["name"] = value
+            self.mark_dirty()
+
+    def selected_section(self) -> dict | None:
+        row = self.section_list.currentRow()
+        sections = self.project.get("sections", []) if self.project else []
+        return sections[row] if 0 <= row < len(sections) else None
 
     def set_project(self, project: dict, path: Path | None) -> None:
         self.project = project
         self.project_path = path
         self.name_edit.setText(project["name"])
         self.refresh_media_table()
+        self.refresh_section_list()
+        self.mark_clean()
 
     def create_project(self) -> None:
-        self.set_project(new_project("Untitled Tutorial"), None)
-        self.status_label.setText("New unsaved project. Import media or choose Save Project.")
+        if self.check_discard():
+            self.set_project(new_project("Untitled Tutorial"), None)
+            self.mark_dirty()
+            self.status_label.setText("New project. Save before closing.")
 
     def open_project(self) -> None:
+        if not self.check_discard():
+            return
         filename, _ = QFileDialog.getOpenFileName(
             self, "Open Creator Hub Project", str(Path.home()), "Project JSON (*.json)"
         )
@@ -115,7 +234,8 @@ class MainWindow(QMainWindow):
         if self.project is None:
             QMessageBox.information(self, "No project", "Create or open a project first.")
             return
-        if self.project_path is None:
+        proposed = self.project_path
+        if proposed is None:
             filename, _ = QFileDialog.getSaveFileName(
                 self, "Save Creator Hub Project",
                 str(Path.home() / "Projects" / "NAnnersCreatorHub" / "tutorial.json"),
@@ -123,15 +243,16 @@ class MainWindow(QMainWindow):
             )
             if not filename:
                 return
-            selected = Path(filename)
-            if selected.suffix != ".json":
-                selected = selected.with_suffix(".json")
-            self.project_path = selected
+            proposed = Path(filename)
+            if proposed.suffix != ".json":
+                proposed = proposed.with_suffix(".json")
         try:
-            save_project(self.project_path, self.project)
+            save_project(proposed, self.project)
         except (ValueError, OSError) as exc:
             QMessageBox.warning(self, "Save failed", str(exc))
             return
+        self.project_path = proposed
+        self.mark_clean()
         self.status_label.setText(f"Saved: {self.project_path}")
 
     def import_media(self) -> None:
@@ -147,7 +268,7 @@ class MainWindow(QMainWindow):
         refs = self.project.setdefault("media", [])
         known = {item["path"] for item in refs}
         added = 0
-        issues = []
+        issues = 0
         for filename in filenames:
             path = str(Path(filename).expanduser().resolve())
             if path in known:
@@ -156,28 +277,30 @@ class MainWindow(QMainWindow):
                 entry = inspect_media(path)
             except (MediaProbeError, OSError) as exc:
                 entry = {"path": path, "name": Path(path).name, "status": "error", "error": str(exc)}
-                issues.append(Path(path).name)
+                issues += 1
             refs.append(entry)
             known.add(path)
             added += 1
+        if added:
+            self.mark_dirty()
         self.refresh_media_table()
+        self.refresh_section_list(self.section_list.currentRow())
         self.status_label.setText(
-            f"Imported {added} reference(s); {len(issues)} need review. "
-            "Save Project to keep changes. Source files unchanged."
+            f"Imported {added} reference(s), {issues} need review. Source files unchanged."
         )
 
     def rescan_media(self) -> None:
         if self.project is None:
-            QMessageBox.information(self, "No project", "Create or open a project first.")
             return
-        previous = self.project.get("media", [])
-        self.project["media"] = [inspect_reference(entry) for entry in previous]
-        errors = sum(entry.get("status") != "ready" for entry in self.project["media"])
+        refs = self.project.get("media", [])
+        if not refs:
+            return
+        self.project["media"] = [inspect_reference(entry) for entry in refs]
+        self.mark_dirty()
         self.refresh_media_table()
-        self.status_label.setText(
-            f"Rescanned {len(previous)} reference(s); {errors} need review. "
-            "Save Project to keep changes."
-        )
+        self.refresh_section_list(self.section_list.currentRow())
+        errors = sum(item["status"] != "ready" for item in self.project["media"])
+        self.status_label.setText(f"Rescanned {len(refs)} references; {errors} need review.")
 
     def refresh_media_table(self) -> None:
         media = self.project.get("media", []) if self.project else []
@@ -207,6 +330,156 @@ class MainWindow(QMainWindow):
                     item.setToolTip(entry["error"])
                 self.media_table.setItem(row, col, item)
         self.media_table.resizeColumnsToContents()
+
+    def refresh_section_list(self, selected: int = 0) -> None:
+        self.loading = True
+        self.section_list.clear()
+        if self.project:
+            for idx, section in enumerate(self.project["sections"], start=1):
+                self.section_list.addItem(f"{idx:02}  {section['title']}  [{section['status']}]")
+        count = self.section_list.count()
+        self.loading = False
+        self.section_list.setCurrentRow(min(max(selected, 0), count - 1) if count else -1)
+        self.show_section(self.section_list.currentRow())
+
+    def show_section(self, row: int) -> None:
+        if self.loading:
+            return
+        self.loading = True
+        section = self.selected_section()
+        fields = (
+            self.section_title, self.narration_combo, self.footage_combo,
+            self.in_point, self.out_point, self.state_combo,
+            self.script_edit, self.notes_edit,
+        )
+        for field in fields:
+            field.setEnabled(section is not None)
+        self.narration_combo.clear()
+        self.footage_combo.clear()
+        self.narration_combo.addItem("— Not assigned —", "")
+        self.footage_combo.addItem("— Not assigned —", "")
+        for entry in self.project.get("media", []) if self.project else []:
+            path = entry["path"]
+            if entry.get("kind") in ("Audio", "Video + Audio"):
+                self.narration_combo.addItem(entry.get("name", Path(path).name), path)
+            if entry.get("kind") in ("Video", "Video + Audio"):
+                self.footage_combo.addItem(entry.get("name", Path(path).name), path)
+        if section is None:
+            self.section_title.clear()
+            self.script_edit.clear()
+            self.notes_edit.clear()
+            self.in_point.setValue(0)
+            self.out_point.setValue(0)
+            self.state_combo.setCurrentIndex(0)
+            self.warnings.setText("Add or select a section.")
+        else:
+            self.section_title.setText(section["title"])
+            self.script_edit.setPlainText(section["script"])
+            self.notes_edit.setPlainText(section["notes"])
+            for combo, key in (
+                (self.narration_combo, "narration_path"),
+                (self.footage_combo, "footage_path"),
+            ):
+                path = section[key]
+                idx = combo.findData(path)
+                if path and idx == -1:
+                    combo.addItem(f"Missing library reference: {Path(path).name}", path)
+                    idx = combo.findData(path)
+                combo.setCurrentIndex(max(idx, 0))
+            self.in_point.setValue(section["footage_in_seconds"])
+            self.out_point.setValue(section["footage_out_seconds"])
+            self.state_combo.setCurrentIndex(self.state_combo.findData(section["status"]))
+            self.refresh_warnings()
+        self.loading = False
+
+    def refresh_warnings(self) -> None:
+        section = self.selected_section()
+        if section is None:
+            self.warnings.setText("Add or select a section.")
+            return
+        messages = section_warnings(section, self.project.get("media", []))
+        self.warnings.setText("Review: " + ("; ".join(messages) if messages else "No automatic timing warnings"))
+
+    def edit_section(self, key: str, value) -> None:
+        if self.loading:
+            return
+        section = self.selected_section()
+        if section is None or section.get(key) == value:
+            return
+        section[key] = value
+        self.mark_dirty()
+        if key in ("title", "status"):
+            row = self.section_list.currentRow()
+            self.section_list.item(row).setText(
+                f"{row+1:02}  {section['title']}  [{section['status']}]"
+            )
+        if key in ("narration_path", "footage_path", "footage_in_seconds", "footage_out_seconds"):
+            self.refresh_warnings()
+
+    def add_section(self) -> None:
+        if self.project is None:
+            QMessageBox.information(self, "No project", "Create or open a project first.")
+            return
+        self.project["sections"].append(new_section(f"Section {len(self.project['sections']) + 1:02}"))
+        self.mark_dirty()
+        self.refresh_section_list(len(self.project["sections"]) - 1)
+
+    def remove_section(self) -> None:
+        section = self.selected_section()
+        if section is None:
+            return
+        choice = QMessageBox.question(
+            self, "Remove section",
+            f"Remove '{section['title']}' from the project? Source media will not be deleted.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            return
+        row = self.section_list.currentRow()
+        del self.project["sections"][row]
+        self.mark_dirty()
+        self.refresh_section_list(max(row - 1, 0))
+
+    def move_section(self, direction: int) -> None:
+        row = self.section_list.currentRow()
+        if self.project is None or row < 0:
+            return
+        new_row = row + direction
+        if not 0 <= new_row < len(self.project["sections"]):
+            return
+        sections = self.project["sections"]
+        sections[row], sections[new_row] = sections[new_row], sections[row]
+        self.mark_dirty()
+        self.refresh_section_list(new_row)
+
+    def open_assigned_media(self, key: str) -> None:
+        section = self.selected_section()
+        path = section.get(key, "") if section else ""
+        if not path or not Path(path).is_file():
+            QMessageBox.information(self, "Media unavailable", "Assign an available media file first.")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            QMessageBox.warning(self, "Open failed", "No desktop media player accepted this file.")
+
+    def suggest_match(self) -> None:
+        section = self.selected_section()
+        if section is None:
+            return
+        proposal = suggest_footage(section["title"], self.project.get("media", []))
+        if proposal is None:
+            QMessageBox.information(self, "No match", "No filename-based footage match found. Select footage manually.")
+            return
+        answer = QMessageBox.question(
+            self, "Review footage suggestion",
+            f"Suggested from filename only:\n{proposal['name']}\n\n"
+            "Use this recording for this section? This does not verify visual content.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.footage_combo.setCurrentIndex(self.footage_combo.findData(proposal["path"]))
+            self.state_combo.setCurrentIndex(self.state_combo.findData("needs_review"))
 
 
 def main() -> int:
