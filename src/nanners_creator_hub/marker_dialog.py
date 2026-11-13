@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout,
@@ -12,6 +13,28 @@ from PySide6.QtWidgets import (
 from .markers import (
     FRAME_RATES, TIMING_BASES, MarkerPlanError, export_markers, marker_plan
 )
+
+
+def detected_kdenlive_fps(config_path: Path | None = None) -> str | None:
+    """Read Kdenlive's saved preference, not an open project's actual frame rate."""
+    path = config_path or (
+        Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "kdenliverc"
+    )
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.strip().startswith("project_fps="):
+                value = line.partition("=")[2].strip()
+                if value in FRAME_RATES:
+                    return value
+                aliases = {
+                    "23.976": "23.976 (24000/1001)",
+                    "29.97": "29.97 (30000/1001)",
+                    "59.94": "59.94 (60000/1001)",
+                }
+                return aliases.get(value)
+    except OSError:
+        pass
+    return None
 
 
 class MarkerExportDialog(QDialog):
@@ -33,8 +56,18 @@ class MarkerExportDialog(QDialog):
         form = QFormLayout()
         self.fps_box = QComboBox()
         self.fps_box.addItems(list(FRAME_RATES))
-        self.fps_box.setCurrentText("30")
+        self.kdenlive_fps_preference = detected_kdenlive_fps()
+        self.fps_box.setCurrentText(self.kdenlive_fps_preference or "30")
         form.addRow("Kdenlive project FPS", self.fps_box)
+        self.fps_hint = QLabel(
+            f"Kdenlive saved preference: {self.kdenlive_fps_preference} FPS. "
+            "Check Project Settings: the currently open project's FPS can differ."
+            if self.kdenlive_fps_preference
+            else "Kdenlive FPS preference unavailable. Confirm the actual "
+                 "timeline FPS in Kdenlive Project Settings."
+        )
+        self.fps_hint.setWordWrap(True)
+        form.addRow("", self.fps_hint)
         self.basis_box = QComboBox()
         for key, label in TIMING_BASES.items():
             self.basis_box.addItem(label, key)
@@ -86,12 +119,33 @@ class MarkerExportDialog(QDialog):
         self.export_button.setEnabled(True)
         fps = FRAME_RATES[self.fps_box.currentText()]
         lines = [f"{len(plan)} marker(s) — positions are Kdenlive timeline frames", ""]
+        if (self.kdenlive_fps_preference
+                and self.fps_box.currentText() != self.kdenlive_fps_preference):
+            lines.extend([
+                "WARNING: Selected FPS differs from Kdenlive's saved preference "
+                f"({self.kdenlive_fps_preference}).",
+                "Confirm the open Kdenlive project's FPS before importing.",
+                "",
+            ])
         for marker in plan:
             seconds = marker["pos"] / float(fps)
             lines.append(f"Frame {marker['pos']:>7}  (~{seconds:.3f}s)  {marker['comment']}")
         self.preview.setPlainText("\n".join(lines))
 
     def save_json(self) -> None:
+        if (self.kdenlive_fps_preference
+                and self.fps_box.currentText() != self.kdenlive_fps_preference):
+            choice = QMessageBox.question(
+                self, "Confirm marker frame rate",
+                f"You selected {self.fps_box.currentText()} FPS, but Kdenlive's "
+                f"saved preference is {self.kdenlive_fps_preference} FPS. "
+                "These can differ from the open project. Have you verified "
+                "the actual project's FPS?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if choice != QMessageBox.StandardButton.Yes:
+                return
         filename, _ = QFileDialog.getSaveFileName(
             self, "Export Kdenlive Timeline Markers",
             str(self.default_directory / "kdenlive-section-markers.json"),
