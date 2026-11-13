@@ -22,6 +22,7 @@ def new_project(name: str) -> dict:
         "section_markers": True,
         "transition_suggestions": False,
         "sections": [],
+        "media": [],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -34,11 +35,17 @@ def validate_project(data: dict) -> None:
     if not isinstance(data.get("name"), str) or not data["name"].strip():
         raise ValueError("Project name is missing")
     if data.get("editing_mode") != "assisted":
-        raise ValueError("Only assisted mode is supported in 0.1.0-dev1")
+        raise ValueError("Only assisted mode is supported in 0.1.0")
     if data.get("preserve_originals") is not True:
         raise ValueError("Original-media preservation must remain enabled")
     if not isinstance(data.get("sections"), list):
         raise ValueError("Sections must be a list")
+    media = data.get("media", [])
+    if not isinstance(media, list):
+        raise ValueError("Media must be a list")
+    for item in media:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not item["path"]:
+            raise ValueError("Every media reference must contain a file path")
 
 
 def save_project(path: Path, data: dict) -> None:
