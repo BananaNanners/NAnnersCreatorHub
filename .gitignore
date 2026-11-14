@@ -8,5 +8,7 @@ dist/
 *.tmp
 # Local user projects and generated outputs (keep outside source checkpoints)
 /tutorial.json
+# User-created project manifests saved at the repository root
+/*.json
 /editing-readiness*.md
 /kdenlive-section-markers*.json

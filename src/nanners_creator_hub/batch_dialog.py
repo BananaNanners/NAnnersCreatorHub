@@ -48,8 +48,10 @@ class BatchNarrationDialog(QDialog):
         heading.setWordWrap(True)
         layout.addWidget(heading)
         subtitle = QLabel(
-            "Sections with existing narration start UNCHECKED. "
-            "Generated takes are only linked to your project after explicit review and approval."
+            f"Showing {len(self.sections)} tutorial section(s), not imported media files. "
+            "To create another row, use Add Section in Assisted Editing. "
+            "Sections with existing narration start UNCHECKED; check Generate to make "
+            "a new take. Existing assignments will not change without separate approval."
         )
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)

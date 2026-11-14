@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from .media import MediaProbeError, inspect_media, inspect_reference
+from .media_library import remove_media_references
 from .marker_dialog import MarkerExportDialog
 from .kokoro_studio import KokoroStudio
 from .batch_dialog import BatchNarrationDialog
@@ -78,7 +79,21 @@ class MainWindow(QMainWindow):
         )
         self.media_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.media_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.media_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        media_controls = QHBoxLayout()
+        media_controls.addWidget(QLabel("Imported media references — source files are never deleted"))
+        media_controls.addStretch()
+        self.remove_media_button = QPushButton("Remove Selected Media…")
+        self.remove_media_button.setObjectName("removeMediaReferencesButton")
+        self.remove_media_button.setToolTip(
+            "Remove selected references from this project only, not files on disk"
+        )
+        self.remove_media_button.setEnabled(False)
+        self.remove_media_button.clicked.connect(self.remove_selected_media)
+        media_controls.addWidget(self.remove_media_button)
+        layout.addLayout(media_controls)
         layout.addWidget(self.media_table, 2)
+        self.media_table.itemSelectionChanged.connect(self.update_remove_media_button)
 
         editing = QSplitter(Qt.Orientation.Horizontal)
         left = QWidget()
@@ -412,6 +427,68 @@ class MainWindow(QMainWindow):
             f"Imported {added} reference(s), {issues} need review. Source files unchanged."
         )
 
+    def update_remove_media_button(self) -> None:
+        self.remove_media_button.setEnabled(
+            self.project is not None
+            and bool(self.media_table.selectionModel().selectedRows())
+        )
+
+    def remove_selected_media(self) -> None:
+        if self.project is None:
+            return
+        selected_rows = sorted(
+            index.row() for index in self.media_table.selectionModel().selectedRows()
+        )
+        if not selected_rows:
+            QMessageBox.information(
+                self, "No media selected",
+                "Select one or more rows in the imported media table first."
+            )
+            return
+        media = self.project["media"]
+        selected_paths = [media[row]["path"] for row in selected_rows]
+        try:
+            updated, affected = remove_media_references(self.project, selected_paths)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Cannot remove media reference", str(exc))
+            return
+
+        filenames = "\n".join(
+            f"• {Path(path).name}" for path in selected_paths[:8]
+        )
+        if len(selected_paths) > 8:
+            filenames += f"\n… and {len(selected_paths) - 8} more"
+        affected_description = (
+            "\n\nAssignments that will be cleared:\n"
+            + "\n".join(
+                f"• {item['title']}: {', '.join(item['fields'])}"
+                for item in affected[:8]
+            )
+            + (f"\n… and {len(affected) - 8} more sections" if len(affected) > 8 else "")
+            if affected else "\n\nNo section assignments use these references."
+        )
+        answer = QMessageBox.question(
+            self, "Remove imported media references?",
+            f"Remove {len(selected_paths)} reference(s) from THIS project?\n\n"
+            + filenames + affected_description
+            + "\n\nThe actual video and audio files WILL NOT be deleted. "
+              "Project changes remain unsaved until you click Save Project.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        selected_section_row = self.section_list.currentRow()
+        self.project = updated
+        self.refresh_media_table()
+        self.refresh_section_list(selected_section_row)
+        self.mark_dirty()
+        self.status_label.setText(
+            f"Removed {len(selected_paths)} media reference(s) from this project; "
+            f"cleared assignments in {len(affected)} section(s). "
+            "Original files untouched. Save Project to keep this change."
+        )
+
     def rescan_media(self) -> None:
         if self.project is None:
             return
@@ -453,6 +530,7 @@ class MainWindow(QMainWindow):
                     item.setToolTip(entry["error"])
                 self.media_table.setItem(row, col, item)
         self.media_table.resizeColumnsToContents()
+        self.update_remove_media_button()
 
     def refresh_section_list(self, selected: int = 0) -> None:
         self.loading = True
