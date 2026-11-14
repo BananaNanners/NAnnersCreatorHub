@@ -24,6 +24,7 @@ from .batch import assign_completed_takes
 from .footage_preview import FootagePreviewDialog
 from .narration_sync import NarrationSyncDialog
 from .thumbnail_browser import ThumbnailBrowserDialog
+from .starter_dialog import StarterTimelineDialog
 from .projects import load_project, new_project, save_project
 from .readiness import analyze_project, export_report
 from .sections import STATUSES, new_section, section_warnings, suggest_footage
@@ -215,6 +216,10 @@ class MainWindow(QMainWindow):
         status_row.addWidget(self.status_label, 1)
         status_row.addWidget(self.save_state_label)
         layout.addLayout(status_row)
+        self.starter_timeline_button = QPushButton("Automatic Kdenlive Starter Timeline…")
+        self.starter_timeline_button.setObjectName("starterTimelineButton")
+        self.starter_timeline_button.clicked.connect(self.export_starter_timeline)
+        layout.addWidget(self.starter_timeline_button)
         self.tabs = QTabWidget()
         self.tabs.addTab(container, "Assisted Editing")
         self.kokoro_studio = KokoroStudio(self)
@@ -318,6 +323,20 @@ class MainWindow(QMainWindow):
         dialog = MarkerExportDialog(self.project, default_dir, self)
         if dialog.exec() and dialog.export_path is not None:
             self.status_label.setText(f"New marker JSON exported: {dialog.export_path}")
+
+    def export_starter_timeline(self) -> None:
+        if self.project is None:
+            QMessageBox.information(
+                self, "No project", "Create or open a tutorial project first."
+            )
+            return
+        default_dir = self.project_path.parent if self.project_path else Path.home()
+        dialog = StarterTimelineDialog(self.project, default_dir, self)
+        if dialog.exec() == StarterTimelineDialog.DialogCode.Accepted and dialog.export_path:
+            self.status_label.setText(
+                f"NEW starter timeline created: {dialog.export_path}. "
+                "Open and inspect it in Kdenlive. Existing projects remain untouched."
+            )
 
     def update_save_state(self) -> None:
         """Persistent save state, independent of transient operation messages."""
