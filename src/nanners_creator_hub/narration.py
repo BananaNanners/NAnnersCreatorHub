@@ -22,6 +22,7 @@ from .kokoro import validate_preferences
 class NarrationJob:
     work_dir: Path
     input_script: Path
+    original_script: Path
     temporary_wav: Path
     output_dir: Path
     stem: str
@@ -37,12 +38,16 @@ def safe_stem(label: str) -> str:
     return slug or "narration"
 
 
-def prepare_job(script: str, label: str, output_dir: Path, prefs: dict) -> NarrationJob:
+def prepare_job(script: str, label: str, output_dir: Path, prefs: dict, spoken_script: str | None = None) -> NarrationJob:
     prefs = validate_preferences(prefs)
     if not isinstance(script, str) or not script.strip():
         raise ValueError("Write or paste a narration script first.")
     if len(script) > 60_000:
         raise ValueError("Script is too long (60,000-character limit). Split it into sections.")
+    if spoken_script is None:
+        spoken_script = script
+    if not isinstance(spoken_script, str) or not spoken_script.strip() or len(spoken_script) > 60_000:
+        raise ValueError("Speech-ready script is missing or too long.")
     output_dir = Path(output_dir).expanduser()
     if not output_dir.is_dir():
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -50,10 +55,12 @@ def prepare_job(script: str, label: str, output_dir: Path, prefs: dict) -> Narra
         raise ValueError("Narration output is not a directory.")
     folder = Path(tempfile.mkdtemp(dir=output_dir, prefix=".nanners-tts-"))
     script_file = folder / "narration-script.txt"
+    original_file = folder / "original-script.txt"
     try:
-        script_file.write_text(script, encoding="utf-8")
+        original_file.write_text(script, encoding="utf-8")
+        script_file.write_text(spoken_script, encoding="utf-8")
         return NarrationJob(
-            folder, script_file, folder / "narration-generated.wav",
+            folder, script_file, original_file, folder / "narration-generated.wav",
             output_dir, safe_stem(label), prefs["voice"], prefs["language"],
             prefs["speed"], Path(prefs["model_path"]).expanduser(),
             Path(prefs["voices_path"]).expanduser(),
@@ -95,14 +102,20 @@ def publish_take(job: NarrationJob) -> Path:
         base = f"{job.stem}-{suffix}-{identity}"
         wav_target = job.output_dir / f"{base}.wav"
         text_target = job.output_dir / f"{base}.txt"
+        speech_target = job.output_dir / f"{base}.speech.txt"
         try:
             os.link(job.temporary_wav, wav_target)
         except FileExistsError:
             continue
+        created = [wav_target]
         try:
-            os.link(job.input_script, text_target)
+            os.link(job.original_script, text_target)
+            created.append(text_target)
+            os.link(job.input_script, speech_target)
+            created.append(speech_target)
         except BaseException:
-            wav_target.unlink(missing_ok=True)
+            for created_path in created:
+                created_path.unlink(missing_ok=True)
             raise
         return wav_target
     raise FileExistsError("Could not select a unique narration filename.")

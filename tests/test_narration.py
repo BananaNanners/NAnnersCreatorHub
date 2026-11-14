@@ -67,6 +67,7 @@ class NarrationFileTests(unittest.TestCase):
                 target = publish_take(job)
                 outputs.append(target)
                 self.assertEqual(target.with_suffix(".txt").read_text(), f"Take {index}")
+                self.assertEqual(target.with_suffix(".speech.txt").read_text(), f"Take {index}")
                 validate_wav(target)
             finally:
                 cleanup_job(job)
@@ -159,6 +160,8 @@ class NarrationGuiTests(unittest.TestCase):
         self.assertIsNotNone(studio.last_output)
         self.assertTrue(studio.last_output.is_file())
         self.assertEqual(studio.last_output.with_suffix(".txt").read_text(), "Hello from the GUI")
+        self.assertEqual(studio.last_output.with_suffix(".speech.txt").read_text(), "Hello from the GUI")
+        self.assertTrue(studio.play_button.isEnabled())
         self.assertIn("WAV created", studio.generation_status.text())
         self.assertTrue(studio.generate_button.isEnabled())
         studio.close()

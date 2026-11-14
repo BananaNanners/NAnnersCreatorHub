@@ -5,6 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QProcess, QUrl
 from PySide6.QtGui import QDesktopServices
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
@@ -18,6 +19,7 @@ from .kokoro import (
 from .narration import (
     NarrationJob, cleanup_job, kokoro_arguments, prepare_job, publish_take,
 )
+from .pronunciations import load_rules, parse_rules, render_rules, save_rules, speech_text
 
 
 def default_output_folder() -> Path:
@@ -34,6 +36,16 @@ class KokoroStudio(QWidget):
         self.process: QProcess | None = None
         self._cancel_requested = False
         self.last_output: Path | None = None
+        try:
+            self._rules = load_rules()
+            self._rule_error = ""
+        except (OSError, ValueError) as exc:
+            self._rules = ()
+            self._rule_error = f"Cannot load saved pronunciation rules: {exc}"
+        self.audio_output = QAudioOutput(self)
+        self.player = QMediaPlayer(self)
+        self.player.setAudioOutput(self.audio_output)
+        self.audio_output.setVolume(0.8)
 
         layout = QVBoxLayout(self)
         title = QLabel("Kokoro Narration Studio")
@@ -102,6 +114,30 @@ class KokoroStudio(QWidget):
         self.script_editor.setMinimumHeight(125)
         layout.addWidget(self.script_editor, 3)
 
+        layout.addWidget(QLabel("Pronunciation rules — one per line: Original => Spoken"))
+        self.rules_editor = QPlainTextEdit()
+        self.rules_editor.setObjectName("kokoroPronunciationRules")
+        self.rules_editor.setPlainText(render_rules(self._rules))
+        self.rules_editor.setMaximumHeight(85)
+        layout.addWidget(self.rules_editor)
+        self.speech_preview = QPlainTextEdit()
+        self.speech_preview.setObjectName("kokoroSpeechPreview")
+        self.speech_preview.setReadOnly(True)
+        self.speech_preview.setMaximumHeight(100)
+        layout.addWidget(QLabel("Speech-ready text (original script stays unchanged)"))
+        layout.addWidget(self.speech_preview)
+        self.rules_status = QLabel(self._rule_error or "Rules only affect speech text.")
+        self.rules_status.setWordWrap(True)
+        layout.addWidget(self.rules_status)
+        rules_row = QHBoxLayout()
+        self.save_rules_button = QPushButton("Save Pronunciations")
+        self.save_rules_button.clicked.connect(self.save_pronunciations)
+        rules_row.addWidget(self.save_rules_button)
+        self.reset_rules_button = QPushButton("Reload Saved Rules")
+        self.reset_rules_button.clicked.connect(self.reload_rules)
+        rules_row.addWidget(self.reset_rules_button)
+        layout.addLayout(rules_row)
+
         output_form = QFormLayout()
         self.take_name = QLineEdit("narration")
         self.take_name.setObjectName("kokoroTakeName")
@@ -139,12 +175,32 @@ class KokoroStudio(QWidget):
         generation_row.addWidget(self.open_output_button)
         layout.addLayout(generation_row)
 
+        playback_row = QHBoxLayout()
+        self.play_button = QPushButton("Play Last Take")
+        self.play_button.setObjectName("kokoroPlayLastTake")
+        self.play_button.setEnabled(False)
+        self.play_button.clicked.connect(self.play_last_take)
+        playback_row.addWidget(self.play_button)
+        self.stop_button = QPushButton("Stop Playback")
+        self.stop_button.setEnabled(False)
+        self.stop_button.clicked.connect(self.player.stop)
+        playback_row.addWidget(self.stop_button)
+        self.playback_status = QLabel("No generated take selected for playback.")
+        self.playback_status.setWordWrap(True)
+        playback_row.addWidget(self.playback_status, 1)
+        layout.addLayout(playback_row)
+        self.player.errorOccurred.connect(self.playback_error)
+        self.player.playbackStateChanged.connect(self.update_playback_controls)
+
         self._initial_load()
         self.model_path.editingFinished.connect(self.scan)
         self.voices_path.editingFinished.connect(self.scan)
         self.voice_selector.currentIndexChanged.connect(self.update_generate_enabled)
         self.script_editor.textChanged.connect(self.update_generate_enabled)
+        self.script_editor.textChanged.connect(self.update_speech_preview)
+        self.rules_editor.textChanged.connect(self.update_speech_preview)
         self.output_dir.textChanged.connect(self.update_generate_enabled)
+        self.update_speech_preview()
 
     @property
     def is_generating(self) -> bool:
@@ -200,14 +256,46 @@ class KokoroStudio(QWidget):
         self.update_generate_enabled()
         return status
 
+    def spoken_text(self) -> str:
+        return speech_text(self.script_editor.toPlainText(), parse_rules(self.rules_editor.toPlainText()))
+
+    def update_speech_preview(self):
+        try:
+            self.speech_preview.setPlainText(self.spoken_text())
+            self.rules_status.setText("✓ Pronunciation rules valid. Original script is preserved.")
+        except ValueError as exc:
+            self.speech_preview.setPlainText("")
+            self.rules_status.setText(f"⚠ Invalid pronunciation rule: {exc}")
+        self.update_generate_enabled()
+
+    def save_pronunciations(self):
+        try:
+            rules = parse_rules(self.rules_editor.toPlainText())
+            dest = save_rules(rules)
+            self._rules = rules
+            self.rules_status.setText(f"✓ Pronunciation rules saved to {dest}")
+        except (OSError, ValueError) as exc:
+            self.rules_status.setText(f"⚠ Cannot save pronunciation rules: {exc}")
+
+    def reload_rules(self):
+        try:
+            self._rules = load_rules()
+            self.rules_editor.setPlainText(render_rules(self._rules))
+        except (OSError, ValueError) as exc:
+            self.rules_status.setText(f"⚠ Cannot reload saved rules: {exc}")
+
     def update_generate_enabled(self):
         ready = bool(
             self._readiness is not None and self._readiness.ready
             and self.voice_selector.currentData()
             and self.voice_selector.currentData() in self._readiness.available_voices
         )
+        try:
+            valid_rules = bool(self.spoken_text().strip())
+        except ValueError:
+            valid_rules = False
         self.generate_button.setEnabled(
-            ready and not self.is_generating
+            ready and valid_rules and not self.is_generating
             and bool(self.script_editor.toPlainText().strip())
             and bool(self.output_dir.text().strip())
         )
@@ -265,6 +353,9 @@ class KokoroStudio(QWidget):
         self.script_editor.setEnabled(not running)
         self.take_name.setEnabled(not running)
         self.output_dir.setEnabled(not running)
+        self.rules_editor.setEnabled(not running)
+        self.save_rules_button.setEnabled(not running)
+        self.reset_rules_button.setEnabled(not running)
         if not running:
             self.update_generate_enabled()
 
@@ -276,9 +367,10 @@ class KokoroStudio(QWidget):
             QMessageBox.warning(self, "Kokoro not ready", "\n".join(status.problems))
             return
         try:
+            spoken = self.spoken_text()
             job = prepare_job(
                 self.script_editor.toPlainText(), self.take_name.text(),
-                Path(self.output_dir.text()), self.current_prefs()
+                Path(self.output_dir.text()), self.current_prefs(), spoken_script=spoken
             )
         except (ValueError, OSError) as exc:
             QMessageBox.warning(self, "Cannot generate narration", str(exc))
@@ -324,9 +416,14 @@ class KokoroStudio(QWidget):
             self._finish_failure(f"Output validation failed: {exc}")
             return
         self.last_output = published
+        self.play_button.setEnabled(True)
+        self.player.stop()
+        self.player.setSource(QUrl.fromLocalFile(str(published)))
+        self.playback_status.setText(f"Ready: {published.name}")
         self.open_output_button.setEnabled(True)
         self.generation_status.setText(
-            f"✓ WAV created: {published.name}. Matching script: {published.with_suffix('.txt').name}. "
+            f"✓ WAV created: {published.name}. Original script: {published.with_suffix('.txt').name}. "
+            f"Speech-ready script: {published.with_suffix('.speech.txt').name}. "
             f"Folder: {published.parent}"
         )
         self._end_job()
@@ -357,6 +454,21 @@ class KokoroStudio(QWidget):
             self.process.waitForFinished(1500)
             if self.job is not None:
                 self._finish_failure("Generation cancelled when closing the hub.")
+
+    def play_last_take(self):
+        if self.last_output is not None and self.last_output.is_file():
+            self.player.setSource(QUrl.fromLocalFile(str(self.last_output)))
+            self.player.play()
+        else:
+            self.playback_status.setText("Last generated WAV is missing.")
+
+    def update_playback_controls(self, state):
+        playing = state == QMediaPlayer.PlaybackState.PlayingState
+        self.stop_button.setEnabled(playing)
+        self.play_button.setEnabled(self.last_output is not None)
+
+    def playback_error(self, error, message):
+        self.playback_status.setText(f"Playback error: {message}")
 
     def open_output_folder(self):
         if self.last_output is None:
