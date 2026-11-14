@@ -67,13 +67,15 @@ class NarrationFileTests(unittest.TestCase):
                 target = publish_take(job)
                 outputs.append(target)
                 self.assertEqual(target.with_suffix(".txt").read_text(), f"Take {index}")
-                self.assertEqual(target.with_suffix(".speech.txt").read_text(), f"Take {index}")
+                self.assertFalse(target.with_suffix(".speech.txt").exists())
                 validate_wav(target)
             finally:
                 cleanup_job(job)
         self.assertNotEqual(outputs[0], outputs[1])
         self.assertEqual(original.read_bytes(), b"DO NOT TOUCH")
         self.assertTrue(all(p.is_file() for p in outputs))
+        self.assertEqual(len(list(output.glob("*.txt"))), 2)  # one TXT for each WAV
+        self.assertEqual(len(list(output.glob("*.wav"))), 3)  # two takes + untouched original
         self.assertFalse(any(p.name.startswith(".nanners-tts-") for p in output.iterdir()))
 
     def test_invalid_audio_never_published(self):
@@ -160,7 +162,7 @@ class NarrationGuiTests(unittest.TestCase):
         self.assertIsNotNone(studio.last_output)
         self.assertTrue(studio.last_output.is_file())
         self.assertEqual(studio.last_output.with_suffix(".txt").read_text(), "Hello from the GUI")
-        self.assertEqual(studio.last_output.with_suffix(".speech.txt").read_text(), "Hello from the GUI")
+        self.assertFalse(studio.last_output.with_suffix(".speech.txt").exists())
         self.assertTrue(studio.play_button.isEnabled())
         self.assertIn("WAV created", studio.generation_status.text())
         self.assertTrue(studio.generate_button.isEnabled())

@@ -422,8 +422,8 @@ class KokoroStudio(QWidget):
         self.playback_status.setText(f"Ready: {published.name}")
         self.open_output_button.setEnabled(True)
         self.generation_status.setText(
-            f"✓ WAV created: {published.name}. Original script: {published.with_suffix('.txt').name}. "
-            f"Speech-ready script: {published.with_suffix('.speech.txt').name}. "
+            f"✓ WAV created: {published.name}. Script: {published.with_suffix('.txt').name}. "
+            "Pronunciation-adjusted text remains visible in the Speech-ready preview. "
             f"Folder: {published.parent}"
         )
         self._end_job()

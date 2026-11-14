@@ -102,7 +102,6 @@ def publish_take(job: NarrationJob) -> Path:
         base = f"{job.stem}-{suffix}-{identity}"
         wav_target = job.output_dir / f"{base}.wav"
         text_target = job.output_dir / f"{base}.txt"
-        speech_target = job.output_dir / f"{base}.speech.txt"
         try:
             os.link(job.temporary_wav, wav_target)
         except FileExistsError:
@@ -111,8 +110,6 @@ def publish_take(job: NarrationJob) -> Path:
         try:
             os.link(job.original_script, text_target)
             created.append(text_target)
-            os.link(job.input_script, speech_target)
-            created.append(speech_target)
         except BaseException:
             for created_path in created:
                 created_path.unlink(missing_ok=True)
