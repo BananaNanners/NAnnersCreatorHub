@@ -45,7 +45,8 @@ class MarkerExportDialog(QDialog):
         self.default_directory = default_directory
         self.export_path: Path | None = None
         self.setWindowTitle("Kdenlive Timeline Marker Export")
-        self.resize(640, 460)
+        self.resize(640, 500)
+        self.setMinimumHeight(500)
         layout = QVBoxLayout(self)
         description = QLabel(
             "Creates a proposed gapless sequence of section-start markers, NOT a "
@@ -68,7 +69,9 @@ class MarkerExportDialog(QDialog):
                  "timeline FPS in Kdenlive Project Settings."
         )
         self.fps_hint.setWordWrap(True)
-        form.addRow("", self.fps_hint)
+        # A spanning row gives this helper the dialog width, avoiding clipping
+        # beside the FPS selector in both KDE light and dark themes.
+        form.addRow(self.fps_hint)
         self.basis_box = QComboBox()
         for key, label in TIMING_BASES.items():
             self.basis_box.addItem(label, key)

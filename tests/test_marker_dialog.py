@@ -45,6 +45,23 @@ class BannerVisibilityTests(unittest.TestCase):
         self.assertFalse(dialog.warning_banner.isVisible())
         dialog.close()
 
+    def test_dialog_sizing_and_full_width_hint(self):
+        from PySide6.QtWidgets import QFormLayout
+        from nanners_creator_hub.marker_dialog import MarkerExportDialog
+        from nanners_creator_hub.projects import new_project
+        dialog = MarkerExportDialog(new_project("Sizing test"), Path("/tmp"))
+        self.assertEqual((dialog.width(), dialog.height()), (640, 500))
+        self.assertGreaterEqual(dialog.minimumHeight(), 500)
+        form = dialog.layout().itemAt(1).layout()
+        self.assertIsInstance(form, QFormLayout)
+        row, role = form.getWidgetPosition(dialog.fps_hint)
+        self.assertGreaterEqual(row, 0)
+        self.assertEqual(role, QFormLayout.ItemRole.SpanningRole)
+        dialog.show()
+        self.app.processEvents()
+        self.assertGreater(dialog.fps_hint.width(), dialog.fps_box.width())
+        dialog.close()
+
     def test_blocking_error_banner_visible(self):
         from nanners_creator_hub.marker_dialog import MarkerExportDialog
         from nanners_creator_hub.projects import new_project
