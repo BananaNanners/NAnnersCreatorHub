@@ -188,13 +188,22 @@ class MainWindow(QMainWindow):
         editing.setStretchFactor(1, 3)
         layout.addWidget(editing, 5)
         self.status_label = QLabel("Create or open a project to begin.")
-        layout.addWidget(self.status_label)
+        self.status_label.setWordWrap(True)
+        self.save_state_label = QLabel()
+        self.save_state_label.setObjectName("projectSaveState")
+        self.save_state_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.save_state_label.setMinimumWidth(280)
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.status_label, 1)
+        status_row.addWidget(self.save_state_label)
+        layout.addLayout(status_row)
         self.tabs = QTabWidget()
         self.tabs.addTab(container, "Assisted Editing")
         self.kokoro_studio = KokoroStudio(self)
         self.tabs.addTab(self.kokoro_studio, "Kokoro Narration Studio")
         self.setCentralWidget(self.tabs)
         self.show_section(-1)
+        self.update_save_state()
 
     def open_batch_narration(self) -> None:
         if self.project is None:
@@ -234,8 +243,9 @@ class MainWindow(QMainWindow):
         self.refresh_section_list(row)
         self.mark_dirty()
         self.status_label.setText(
-            f"Assigned {len(dialog.selected_assignments)} new narration reference(s). "
-            "Review them, then Save Project. Existing audio files were preserved."
+            f"UNSAVED CHANGES — Assigned {len(dialog.selected_assignments)} new "
+            "narration reference(s). Review them and click Save Project. "
+            "Existing audio files were preserved."
         )
 
     def show_readiness_report(self) -> None:
@@ -291,13 +301,36 @@ class MainWindow(QMainWindow):
         if dialog.exec() and dialog.export_path is not None:
             self.status_label.setText(f"New marker JSON exported: {dialog.export_path}")
 
+    def update_save_state(self) -> None:
+        """Persistent save state, independent of transient operation messages."""
+        base_title = f"NAnners Creator Hub — {__version__}"
+        if self.project is None:
+            label, color = "NO PROJECT OPEN", "#aab3bf"
+        elif self.dirty:
+            label, color = "UNSAVED CHANGES — Save Project", "#ffcc66"
+        elif self.project_path is None:
+            label, color = "NOT SAVED — Save Project", "#ffcc66"
+        else:
+            label, color = "SAVED", "#90d9aa"
+        self.save_state_label.setText(label)
+        self.save_state_label.setToolTip(
+            "Project changes are only written to the JSON file when you click Save Project."
+            if self.project is not None and (self.dirty or self.project_path is None)
+            else "The project is saved on disk." if self.project is not None
+            else "Open an existing tutorial or create a new one."
+        )
+        self.save_state_label.setStyleSheet(
+            f"font-weight: 700; color: {color};"
+        )
+        self.setWindowTitle(base_title + (" — UNSAVED" if self.dirty else ""))
+
     def mark_dirty(self) -> None:
         self.dirty = True
-        self.setWindowModified(True)
+        self.update_save_state()
 
     def mark_clean(self) -> None:
         self.dirty = False
-        self.setWindowModified(False)
+        self.update_save_state()
 
     def check_discard(self) -> bool:
         if not self.dirty:

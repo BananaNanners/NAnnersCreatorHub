@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanners-creator-hub"
-version = "0.2.0.dev4+fix1"
+version = "0.2.0.dev4+fix2"
 description = "Local-first YouTube tutorial production assistant"
 license = "MIT"
 requires-python = ">=3.11"
