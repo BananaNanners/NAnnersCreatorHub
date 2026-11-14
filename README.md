@@ -1,49 +1,40 @@
 # NAnners Creator Hub
 
-Local-first YouTube production assistant for Linux, Kdenlive, OBS and Kokoro.
+**v0.1.0** — A local-first YouTube tutorial production assistant for CachyOS/Linux, Kdenlive, OBS and Kokoro. Licensed under MIT.
 
-## Current milestone: 0.1.0-dev5 (release candidate, awaiting KDE/Kdenlive validation)
+## Features
 
-- Assisted section editing and media references from dev1–dev3
-- Readiness analysis and Markdown report export from dev4
-- **Kdenlive Markers**: preview and export an optional new JSON file of proposed timeline markers
-- Supported rates: 23.976, 24, 25, 29.97, 30, 50, 59.94, 60 fps (rational rates)
-- Choose sequence length basis: selected footage ranges or narration durations
-- Select a starting timeline frame; markers are generated at successive section starts
-- Marker file: JSON list with integer `pos` frame indices, `comment` and `type`
-- Exports refuse overwrite; existing media and .kdenlive projects are not altered
-- Source projects from dev1–dev4 remain compatible
+- Assisted editing: tutorial sections, script, media assignments, source in/out points and review notes
+- Read-only FFprobe media inspection, duplicate detection and missing-file rescans
+- Timing difference warnings and an exportable Markdown editing-readiness report
+- Kdenlive timeline-guide JSON export with frame-accurate positions for 23.976, 24, 25, 29.97, 30, 50, 59.94 and 60 FPS
+- FPS preference detection, prominent mismatch warnings, and export validation
+- A 640 × 500 marker export dialog with full-width FPS guidance
+- User-local KDE launcher, retained installed releases, and rollback to any retained version
 
-## Important marker limitation
-
-**These are proposed sequential markers, not marker positions extracted from the actual Kdenlive timeline.** The exporter assumes every section begins immediately after the previous section's selected footage range or narration duration. In real edits, gaps, transitions, B-roll, multiple tracks, etc. can change the true positions. Review and adjust markers in Kdenlive. Choose the exact timeline FPS.
-
-Marker export is separate from automatic timeline generation, which remains out of scope for 0.1.0.
-
-## Launch
+## Run from source
 
 ```fish
 cd ~/Projects/NAnnersCreatorHub
 env PYTHONPATH=src python -m nanners_creator_hub
 ```
 
-## Automated tests
+## Install or upgrade
+
+See [INSTALL.md](INSTALL.md). Requires Python 3.11+, PySide6, and FFprobe. The installer does not require sudo and does not install system packages.
+
+## Tests
 
 ```fish
 env PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
-## Manual dev5 verification
+## Important limitations
 
-1. Open your saved `tutorial.json`; ensure imported media and the Welcome section are preserved.
-2. Click **Kdenlive Markers**.
-3. Select the FPS of a **disposable or backed-up** Kdenlive test project. Set section lengths from **Selected footage ranges**; choose **First timeline frame = 0**.
-4. Review preview: with one section, its only marker will be at frame 0. Add a second section with valid sources and ranges if you want to test cumulative positions.
-5. Export a **new** `kdenlive-section-markers.json`; verify it opens as JSON with fields `pos`, `comment`, `type`.
-6. In a disposable Kdenlive project, import the JSON as **timeline guides** and confirm guide names and frame positions match the preview.
-7. Do not import this JSON as clip-specific markers if you want timeline section boundaries.
-8. Verify the original `tutorial.json`, recordings and Kdenlive projects have not been modified.
+This is an **assisted-editing planner**, not an automatic video editor. Marker export proposes sequential section-start positions based on user-selected footage ranges or narration durations; it does **not** inspect an existing Kdenlive timeline. Gaps, transitions, B-roll and multiple tracks can shift actual section starts. Check the current Kdenlive project's FPS under Project Settings; its settings can differ from Kdenlive's saved FPS preference.
 
-## Release status
+Marker export creates a *new* JSON file and never edits Kdenlive projects. Existing recordings, Kokoro WAV files and other source media are only referenced and scanned read-only. Automatic Timeline Mode remains planned for a future version.
 
-Pending hands-on Kdenlive 26.08.3 marker-import validation, UI visual check, and documented install/upgrade procedure. Do not tag a final `v0.1.0` release until these pass.
+## License
+
+[MIT](LICENSE)

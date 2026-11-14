@@ -39,7 +39,7 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue((self.release_root / "current").is_symlink())
         self.assertTrue((self.release_root / "current/src/nanners_creator_hub/app.py").is_file())
         self.assertEqual(self.call("list").returncode, 0)
-        self.assertIn("* 0.1.0-dev8", self.call("list").stdout)
+        self.assertIn("* 0.1.0", self.call("list").stdout)
 
     def test_refuses_unmanaged_launcher(self):
         self.bin.parent.mkdir(parents=True)
@@ -51,7 +51,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_existing_release_does_not_get_replaced(self):
         self.assertEqual(self.call("install").returncode, 0)
-        existing = self.release_root / "releases/0.1.0-dev8/src/nanners_creator_hub/app.py"
+        existing = self.release_root / "releases/0.1.0/src/nanners_creator_hub/app.py"
         before = existing.read_bytes()
         result = self.call("install")
         self.assertNotEqual(result.returncode, 0)
@@ -61,13 +61,13 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.call("install").returncode, 0)
         release_path = self.release_root / "releases"
         archived = release_path / "0.1.0-dev4"
-        shutil.copytree(release_path / "0.1.0-dev8", archived)
+        shutil.copytree(release_path / "0.1.0", archived)
         result = self.call("rollback", "0.1.0-dev4")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.release_root / "current").resolve(), archived)
         self.assertIn("* 0.1.0-dev4", self.call("list").stdout)
-        self.assertEqual(self.call("rollback", "0.1.0-dev8").returncode, 0)
-        self.assertEqual((self.release_root / "current").resolve(), release_path / "0.1.0-dev8")
+        self.assertEqual(self.call("rollback", "0.1.0").returncode, 0)
+        self.assertEqual((self.release_root / "current").resolve(), release_path / "0.1.0")
 
     def test_nonexistent_rollback_rejected(self):
         result = self.call("rollback", "unknown")
