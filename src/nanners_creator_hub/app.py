@@ -18,6 +18,8 @@ from . import __version__
 from .media import MediaProbeError, inspect_media, inspect_reference
 from .marker_dialog import MarkerExportDialog
 from .kokoro_studio import KokoroStudio
+from .batch_dialog import BatchNarrationDialog
+from .batch import assign_completed_takes
 from .projects import load_project, new_project, save_project
 from .readiness import analyze_project, export_report
 from .sections import STATUSES, new_section, section_warnings, suggest_footage
@@ -97,6 +99,10 @@ class MainWindow(QMainWindow):
         for btn in (add, remove, up, down):
             left_buttons.addWidget(btn)
         left_layout.addLayout(left_buttons)
+        batch_button = QPushButton("Batch Kokoro Narration…")
+        batch_button.setObjectName("batchNarrationButton")
+        batch_button.clicked.connect(self.open_batch_narration)
+        left_layout.addWidget(batch_button)
         editing.addWidget(left)
 
         right = QWidget()
@@ -174,6 +180,48 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.kokoro_studio, "Kokoro Narration Studio")
         self.setCentralWidget(self.tabs)
         self.show_section(-1)
+
+    def open_batch_narration(self) -> None:
+        if self.project is None:
+            QMessageBox.information(self, "No project", "Create or open a project first.")
+            return
+        if self.kokoro_studio.is_generating:
+            QMessageBox.information(
+                self, "Kokoro busy",
+                "Finish or cancel the single-take generation before starting a batch."
+            )
+            return
+        try:
+            dialog = BatchNarrationDialog(self.project, self.kokoro_studio, self)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Batch unavailable", str(exc))
+            return
+        if dialog.exec() != BatchNarrationDialog.DialogCode.Accepted:
+            if dialog.completed:
+                self.status_label.setText(
+                    f"Kept {len(dialog.completed)} new WAV take(s) without assigning them."
+                )
+            return
+        try:
+            updated = assign_completed_takes(
+                self.project, dialog.completed, dialog.selected_assignments,
+                allow_replace=dialog.replacement_approved,
+            )
+        except (OSError, ValueError, MediaProbeError) as exc:
+            QMessageBox.warning(
+                self, "Assignment not applied",
+                f"All new WAVs remain on disk. Project unchanged.\n\n{exc}",
+            )
+            return
+        row = self.section_list.currentRow()
+        self.project = updated
+        self.refresh_media_table()
+        self.refresh_section_list(row)
+        self.mark_dirty()
+        self.status_label.setText(
+            f"Assigned {len(dialog.selected_assignments)} new narration reference(s). "
+            "Review them, then Save Project. Existing audio files were preserved."
+        )
 
     def show_readiness_report(self) -> None:
         if self.project is None:
