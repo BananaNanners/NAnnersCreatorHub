@@ -12,3 +12,6 @@ dist/
 /*.json
 /editing-readiness*.md
 /kdenlive-section-markers*.json
+
+# Generated Kdenlive projects must not enter source releases
+/*.kdenlive

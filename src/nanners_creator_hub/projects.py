@@ -37,7 +37,7 @@ def validate_project(data: dict) -> None:
     if not isinstance(data.get("name"), str) or not data["name"].strip():
         raise ValueError("Project name is missing")
     if data.get("editing_mode") != "assisted":
-        raise ValueError("Only assisted mode is supported in 0.1.0")
+        raise ValueError("Only the assisted-editing project schema is supported")
     if data.get("preserve_originals") is not True:
         raise ValueError("Original-media preservation must remain enabled")
     if not isinstance(data.get("sections"), list):

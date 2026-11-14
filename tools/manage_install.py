@@ -49,7 +49,7 @@ def valid_version(version: str) -> str:
 
 
 def check_prerequisites() -> None:
-    missing = [program for program in ("python3", "ffprobe") if not shutil.which(program)]
+    missing = [program for program in ("python3", "ffprobe", "ffmpeg") if not shutil.which(program)]
     if missing:
         raise RuntimeError(f"Missing required commands: {', '.join(missing)}")
     result = subprocess.run(
