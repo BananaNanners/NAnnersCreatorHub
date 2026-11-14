@@ -97,6 +97,12 @@ class NarrationGuiTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        # Qt FFmpeg decoder is exercised separately. GUI tests need only a
+        # source URL assignment, not active backend decode threads.
+        from PySide6.QtMultimedia import QMediaPlayer
+        media_patcher = patch.object(QMediaPlayer, "setSource", autospec=True)
+        media_patcher.start()
+        self.addCleanup(media_patcher.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.folder = Path(self.temp.name)

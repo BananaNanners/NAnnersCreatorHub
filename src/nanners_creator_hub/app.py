@@ -22,6 +22,7 @@ from .kokoro_studio import KokoroStudio
 from .batch_dialog import BatchNarrationDialog
 from .batch import assign_completed_takes
 from .footage_preview import FootagePreviewDialog
+from .narration_sync import NarrationSyncDialog
 from .projects import load_project, new_project, save_project
 from .readiness import analyze_project, export_report
 from .sections import STATUSES, new_section, section_warnings, suggest_footage
@@ -136,6 +137,10 @@ class MainWindow(QMainWindow):
         play_narration = QPushButton("Open Audio")
         play_narration.clicked.connect(lambda: self.open_assigned_media("narration_path"))
         narration_row.addWidget(play_narration)
+        sync_button = QPushButton("Sync / Waveform…")
+        sync_button.setObjectName("narrationSyncButton")
+        sync_button.clicked.connect(self.open_narration_sync)
+        narration_row.addWidget(sync_button)
         form.addRow("Narration", narration_row)
         footage_row = QHBoxLayout()
         self.footage_combo = QComboBox()
@@ -691,6 +696,98 @@ class MainWindow(QMainWindow):
         sections[row], sections[new_row] = sections[new_row], sections[row]
         self.mark_dirty()
         self.refresh_section_list(new_row)
+
+    def open_narration_sync(self) -> None:
+        section = self.selected_section()
+        if section is None or self.project is None:
+            QMessageBox.information(self, "No section", "Select a tutorial section first.")
+            return
+        audio_path = section.get("narration_path", "")
+        if not audio_path:
+            QMessageBox.information(
+                self, "No narration assigned",
+                "Assign a narration audio recording before using the waveform view.",
+            )
+            return
+        audio_ref = next(
+            (entry for entry in self.project["media"] if entry["path"] == audio_path),
+            None,
+        )
+        if not audio_ref or audio_ref.get("kind") not in ("Audio", "Video + Audio"):
+            QMessageBox.warning(
+                self, "Narration unavailable",
+                "Select an imported audio reference before opening Narration Sync.",
+            )
+            return
+        narration_duration = audio_ref.get("duration_seconds")
+        if not narration_duration:
+            try:
+                narration_duration = inspect_media(audio_path)["duration_seconds"]
+            except (OSError, MediaProbeError) as exc:
+                QMessageBox.warning(self, "Cannot inspect narration", str(exc))
+                return
+        if not narration_duration:
+            QMessageBox.warning(
+                self, "Narration duration unknown",
+                "Please assign an audio file with a measurable duration.",
+            )
+            return
+
+        footage_path = section.get("footage_path", "")
+        footage_duration = None
+        if footage_path:
+            footage_ref = next(
+                (entry for entry in self.project["media"] if entry["path"] == footage_path),
+                None,
+            )
+            if (footage_ref is None
+                    or not footage_ref.get("kind", "").startswith("Video")
+                    or not Path(footage_path).is_file()):
+                QMessageBox.warning(
+                    self, "Footage unavailable",
+                    "The assigned footage reference is missing or not a valid video.",
+                )
+                return
+            footage_duration = footage_ref.get("duration_seconds")
+        try:
+            dialog = NarrationSyncDialog(
+                Path(audio_path), narration_duration,
+                Path(footage_path) if footage_path else None,
+                footage_duration,
+                section["footage_in_seconds"], section["footage_out_seconds"],
+                self,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Cannot open narration sync", str(exc))
+            return
+        section_id = section["id"]
+        if dialog.exec() != NarrationSyncDialog.DialogCode.Accepted:
+            return
+        if dialog.applied_range is None:
+            return
+        current = self.selected_section()
+        if (current is None or current["id"] != section_id
+                or current["narration_path"] != audio_path
+                or current["footage_path"] != footage_path):
+            QMessageBox.warning(
+                self, "Section changed",
+                "Narration or footage assignment changed while previewing. "
+                "No range was applied.",
+            )
+            return
+        start, end = dialog.applied_range
+        if (current["footage_in_seconds"], current["footage_out_seconds"]) == (start, end):
+            self.status_label.setText("Narration Sync range was already assigned.")
+            return
+        current["footage_in_seconds"] = start
+        current["footage_out_seconds"] = end
+        self.show_section(self.section_list.currentRow())
+        self.mark_dirty()
+        self.status_label.setText(
+            f"UNSAVED CHANGES — Updated {current['title']} footage range to "
+            f"{start:.3f}–{end:.3f} s after narration comparison. "
+            "Source files untouched. Save Project to keep the change."
+        )
 
     def preview_footage_range(self) -> None:
         section = self.selected_section()

@@ -32,6 +32,10 @@ class PreviewGuiTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        from PySide6.QtMultimedia import QMediaPlayer
+        patcher = patch.object(QMediaPlayer, "setSource", autospec=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.video = Path(self.tmp.name) / "test-video.mkv"
