@@ -21,6 +21,7 @@ from .marker_dialog import MarkerExportDialog
 from .kokoro_studio import KokoroStudio
 from .batch_dialog import BatchNarrationDialog
 from .batch import assign_completed_takes
+from .footage_preview import FootagePreviewDialog
 from .projects import load_project, new_project, save_project
 from .readiness import analyze_project, export_report
 from .sections import STATUSES, new_section, section_warnings, suggest_footage
@@ -145,6 +146,10 @@ class MainWindow(QMainWindow):
         open_footage = QPushButton("Open Footage")
         open_footage.clicked.connect(lambda: self.open_assigned_media("footage_path"))
         footage_row.addWidget(open_footage)
+        preview_footage = QPushButton("Preview / Set Range…")
+        preview_footage.setObjectName("previewFootageButton")
+        preview_footage.clicked.connect(self.preview_footage_range)
+        footage_row.addWidget(preview_footage)
         suggest = QPushButton("Suggest")
         suggest.clicked.connect(self.suggest_match)
         footage_row.addWidget(suggest)
@@ -686,6 +691,60 @@ class MainWindow(QMainWindow):
         sections[row], sections[new_row] = sections[new_row], sections[row]
         self.mark_dirty()
         self.refresh_section_list(new_row)
+
+    def preview_footage_range(self) -> None:
+        section = self.selected_section()
+        if section is None or self.project is None:
+            QMessageBox.information(self, "No section", "Select a tutorial section first.")
+            return
+        source = section.get("footage_path", "")
+        if not source:
+            QMessageBox.information(
+                self, "No footage assigned",
+                "Choose an imported video recording in the Footage selector first.",
+            )
+            return
+        media = next(
+            (item for item in self.project["media"] if item["path"] == source), None
+        )
+        if media is None or not media.get("kind", "").startswith("Video"):
+            QMessageBox.warning(
+                self, "Footage unavailable", "Assign a valid video reference before previewing."
+            )
+            return
+        try:
+            dialog = FootagePreviewDialog(
+                Path(source), media.get("duration_seconds"),
+                section["footage_in_seconds"], section["footage_out_seconds"], self,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Cannot preview footage", str(exc))
+            return
+        selected_id = section["id"]
+        if dialog.exec() != FootagePreviewDialog.DialogCode.Accepted:
+            return
+        if dialog.applied_range is None:
+            return
+        current = self.selected_section()
+        if (current is None or current["id"] != selected_id
+                or current["footage_path"] != source):
+            QMessageBox.warning(
+                self, "Selection changed",
+                "The selected footage changed while previewing. No range was applied.",
+            )
+            return
+        start, end = dialog.applied_range
+        if (current["footage_in_seconds"], current["footage_out_seconds"]) == (start, end):
+            self.status_label.setText("The previewed source range is already assigned.")
+            return
+        current["footage_in_seconds"] = start
+        current["footage_out_seconds"] = end
+        self.show_section(self.section_list.currentRow())
+        self.mark_dirty()
+        self.status_label.setText(
+            f"UNSAVED CHANGES — Applied source range {start:.3f}–{end:.3f} s "
+            f"to {current['title']}. Source recording untouched. Save Project to keep it."
+        )
 
     def open_assigned_media(self, key: str) -> None:
         section = self.selected_section()
