@@ -11,12 +11,13 @@ from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QMainWindow,
     QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
-    QTextEdit, QVBoxLayout, QWidget,
+    QTextEdit, QVBoxLayout, QWidget, QTabWidget,
 )
 
 from . import __version__
 from .media import MediaProbeError, inspect_media, inspect_reference
 from .marker_dialog import MarkerExportDialog
+from .kokoro_studio import KokoroStudio
 from .projects import load_project, new_project, save_project
 from .readiness import analyze_project, export_report
 from .sections import STATUSES, new_section, section_warnings, suggest_footage
@@ -167,7 +168,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(editing, 5)
         self.status_label = QLabel("Create or open a project to begin.")
         layout.addWidget(self.status_label)
-        self.setCentralWidget(container)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(container, "Assisted Editing")
+        self.kokoro_studio = KokoroStudio(self)
+        self.tabs.addTab(self.kokoro_studio, "Kokoro Narration Studio")
+        self.setCentralWidget(self.tabs)
         self.show_section(-1)
 
     def show_readiness_report(self) -> None:
