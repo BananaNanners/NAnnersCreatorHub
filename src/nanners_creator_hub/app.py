@@ -248,10 +248,22 @@ class MainWindow(QMainWindow):
         return choice == QMessageBox.StandardButton.Discard
 
     def closeEvent(self, event) -> None:
-        if self.check_discard():
-            event.accept()
-        else:
+        if not self.check_discard():
             event.ignore()
+            return
+        if self.kokoro_studio.is_generating:
+            choice = QMessageBox.question(
+                self, "Narration generation in progress",
+                "Cancel this Kokoro generation and close the hub? "
+                "Existing WAV files will be preserved.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if choice != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            self.kokoro_studio.stop_for_shutdown()
+        event.accept()
 
     def change_project_name(self, value: str) -> None:
         if self.project is not None:

@@ -1,18 +1,27 @@
-"""Kokoro Narration Studio — dev1 settings and readiness only."""
+"""Kokoro Narration Studio — dev2 asynchronous, non-destructive WAV export."""
 from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import QProcess, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout,
-    QLabel, QLineEdit, QMessageBox, QPushButton, QTextEdit, QVBoxLayout,
-    QWidget,
+    QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
+    QVBoxLayout, QWidget,
 )
 
 from .kokoro import (
     LANGUAGES, KokoroStatus, inspect_kokoro, load_preferences, save_preferences,
     default_preferences,
 )
+from .narration import (
+    NarrationJob, cleanup_job, kokoro_arguments, prepare_job, publish_take,
+)
+
+
+def default_output_folder() -> Path:
+    return Path.home() / "Music" / "NAnnersCreatorHub" / "Narration"
 
 
 class KokoroStudio(QWidget):
@@ -20,13 +29,19 @@ class KokoroStudio(QWidget):
         super().__init__(parent)
         self.setObjectName("kokoroNarrationStudio")
         self._loaded_settings = default_preferences()
+        self._readiness: KokoroStatus | None = None
+        self.job: NarrationJob | None = None
+        self.process: QProcess | None = None
+        self._cancel_requested = False
+        self.last_output: Path | None = None
+
         layout = QVBoxLayout(self)
         title = QLabel("Kokoro Narration Studio")
         title.setStyleSheet("font-size: 20px; font-weight: 700;")
         layout.addWidget(title)
         explanation = QLabel(
-            "dev1: Discover local Kokoro models and voices, choose your defaults, and "
-            "verify readiness. Script editing, speech generation and WAV previews arrive in dev2."
+            "Write or paste your script, select a voice, and generate a new WAV take. "
+            "The hub preserves existing audio and saves a matching script snapshot."
         )
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
@@ -55,11 +70,9 @@ class KokoroStudio(QWidget):
         self.voice_selector = QComboBox()
         self.voice_selector.setObjectName("kokoroVoiceSelector")
         form.addRow("Voice", self.voice_selector)
-
         self.language_selector = QComboBox()
         self.language_selector.addItems(LANGUAGES)
         form.addRow("Language", self.language_selector)
-
         self.speed_selector = QDoubleSpinBox()
         self.speed_selector.setRange(0.5, 2.0)
         self.speed_selector.setSingleStep(0.05)
@@ -82,13 +95,60 @@ class KokoroStudio(QWidget):
         buttons.addWidget(self.save_button)
         layout.addLayout(buttons)
 
-        self.generate_button = QPushButton("Generate WAV — coming in dev2")
-        self.generate_button.setEnabled(False)
-        layout.addWidget(self.generate_button)
+        layout.addWidget(QLabel("Narration script"))
+        self.script_editor = QPlainTextEdit()
+        self.script_editor.setObjectName("kokoroScriptEditor")
+        self.script_editor.setPlaceholderText("Write or paste the text for this narration take…")
+        self.script_editor.setMinimumHeight(125)
+        layout.addWidget(self.script_editor, 3)
+
+        output_form = QFormLayout()
+        self.take_name = QLineEdit("narration")
+        self.take_name.setObjectName("kokoroTakeName")
+        self.take_name.setPlaceholderText("e.g. 02-steam-compatibility")
+        output_form.addRow("Take name", self.take_name)
+        self.output_dir = QLineEdit(str(default_output_folder()))
+        self.output_dir.setObjectName("kokoroOutputDir")
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(self.output_dir)
+        browse_output = QPushButton("Folder…")
+        browse_output.clicked.connect(self.browse_output)
+        folder_row.addWidget(browse_output)
+        output_form.addRow("WAV folder", folder_row)
+        layout.addLayout(output_form)
+
+        self.generation_status = QLabel(
+            "Ready to generate when a script is entered. Each take gets a unique name."
+        )
+        self.generation_status.setObjectName("kokoroGenerationStatus")
+        self.generation_status.setWordWrap(True)
+        layout.addWidget(self.generation_status)
+
+        generation_row = QHBoxLayout()
+        self.generate_button = QPushButton("Generate WAV")
+        self.generate_button.setObjectName("kokoroGenerateWav")
+        self.generate_button.clicked.connect(self.generate)
+        generation_row.addWidget(self.generate_button)
+        self.cancel_button = QPushButton("Cancel Generation")
+        self.cancel_button.clicked.connect(self.cancel_generation)
+        self.cancel_button.setEnabled(False)
+        generation_row.addWidget(self.cancel_button)
+        self.open_output_button = QPushButton("Open Output Folder")
+        self.open_output_button.setEnabled(False)
+        self.open_output_button.clicked.connect(self.open_output_folder)
+        generation_row.addWidget(self.open_output_button)
+        layout.addLayout(generation_row)
 
         self._initial_load()
         self.model_path.editingFinished.connect(self.scan)
         self.voices_path.editingFinished.connect(self.scan)
+        self.voice_selector.currentIndexChanged.connect(self.update_generate_enabled)
+        self.script_editor.textChanged.connect(self.update_generate_enabled)
+        self.output_dir.textChanged.connect(self.update_generate_enabled)
+
+    @property
+    def is_generating(self) -> bool:
+        return self.job is not None
 
     def _initial_load(self):
         try:
@@ -120,6 +180,7 @@ class KokoroStudio(QWidget):
         prefs = self.current_prefs()
         prefs["voice"] = voice
         status = inspect_kokoro(prefs)
+        self._readiness = status
         self.voice_selector.blockSignals(True)
         self.voice_selector.clear()
         for name in status.available_voices:
@@ -131,13 +192,25 @@ class KokoroStudio(QWidget):
             self.voice_selector.addItem("No voices detected", "")
         self.voice_selector.blockSignals(False)
         self.status_label.setText(
-            f"✓ Kokoro ready — {len(status.available_voices)} voices detected. "
-            "No audio will be created in dev1."
+            f"✓ Kokoro ready — {len(status.available_voices)} voices detected."
             if status.ready
             else "Needs review: " + "; ".join(status.problems)
         )
-        self.save_button.setEnabled(bool(status.available_voices) and status.ready)
+        self.save_button.setEnabled(status.ready and not self.is_generating)
+        self.update_generate_enabled()
         return status
+
+    def update_generate_enabled(self):
+        ready = bool(
+            self._readiness is not None and self._readiness.ready
+            and self.voice_selector.currentData()
+            and self.voice_selector.currentData() in self._readiness.available_voices
+        )
+        self.generate_button.setEnabled(
+            ready and not self.is_generating
+            and bool(self.script_editor.toPlainText().strip())
+            and bool(self.output_dir.text().strip())
+        )
 
     def browse_model(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -157,6 +230,14 @@ class KokoroStudio(QWidget):
             self.voices_path.setText(filename)
             self.scan()
 
+    def browse_output(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Narration Output Folder",
+            str(Path(self.output_dir.text()).expanduser())
+        )
+        if folder:
+            self.output_dir.setText(folder)
+
     def save(self):
         status = self.scan()
         if not status.ready:
@@ -170,3 +251,114 @@ class KokoroStudio(QWidget):
             return
         self._loaded_settings = prefs
         self.status_label.setText(f"✓ Settings saved to {path}. Kokoro ready.")
+
+    def set_running(self, running: bool):
+        self.generate_button.setEnabled(False)
+        self.cancel_button.setEnabled(running)
+        self.scan_button.setEnabled(not running)
+        self.save_button.setEnabled(not running and bool(self._readiness and self._readiness.ready))
+        self.model_path.setEnabled(not running)
+        self.voices_path.setEnabled(not running)
+        self.voice_selector.setEnabled(not running)
+        self.language_selector.setEnabled(not running)
+        self.speed_selector.setEnabled(not running)
+        self.script_editor.setEnabled(not running)
+        self.take_name.setEnabled(not running)
+        self.output_dir.setEnabled(not running)
+        if not running:
+            self.update_generate_enabled()
+
+    def generate(self):
+        if self.is_generating:
+            return
+        status = self.scan()
+        if not status.ready:
+            QMessageBox.warning(self, "Kokoro not ready", "\n".join(status.problems))
+            return
+        try:
+            job = prepare_job(
+                self.script_editor.toPlainText(), self.take_name.text(),
+                Path(self.output_dir.text()), self.current_prefs()
+            )
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Cannot generate narration", str(exc))
+            return
+
+        self.job = job
+        self._cancel_requested = False
+        self.process = QProcess(self)
+        self.process.setProgram(str(status.executable))
+        self.process.setArguments(kokoro_arguments(job))
+        self.process.setWorkingDirectory(str(job.work_dir))
+        self.process.finished.connect(self._on_finished)
+        self.process.errorOccurred.connect(self._on_error)
+        self.generation_status.setText(
+            f"Generating {job.stem} with {job.voice}… Existing audio will not be overwritten."
+        )
+        self.set_running(True)
+        self.process.start()
+
+    def _on_error(self, error):
+        if error == QProcess.ProcessError.FailedToStart and self.job is not None:
+            self._finish_failure("Kokoro could not be started. Check your CLI installation.")
+
+    def _on_finished(self, exit_code: int, exit_status):
+        if self.job is None:
+            return
+        if self._cancel_requested:
+            self._finish_failure("Generation cancelled; no new audio was published.")
+            return
+        if exit_status != QProcess.ExitStatus.NormalExit or exit_code != 0:
+            message = ""
+            if self.process is not None:
+                message = bytes(self.process.readAllStandardError()).decode(
+                    "utf-8", errors="replace"
+                ).strip()
+            self._finish_failure(
+                f"Kokoro exited with code {exit_code}. {message[-600:]}"
+            )
+            return
+        try:
+            published = publish_take(self.job)
+        except (OSError, ValueError) as exc:
+            self._finish_failure(f"Output validation failed: {exc}")
+            return
+        self.last_output = published
+        self.open_output_button.setEnabled(True)
+        self.generation_status.setText(
+            f"✓ WAV created: {published.name}. Matching script: {published.with_suffix('.txt').name}. "
+            f"Folder: {published.parent}"
+        )
+        self._end_job()
+
+    def _finish_failure(self, message: str):
+        self.generation_status.setText("✗ " + message)
+        self._end_job()
+
+    def _end_job(self):
+        cleanup_job(self.job)
+        self.job = None
+        process = self.process
+        self.process = None
+        if process is not None:
+            process.deleteLater()
+        self.set_running(False)
+
+    def cancel_generation(self):
+        if self.process is not None and self.is_generating:
+            self._cancel_requested = True
+            self.generation_status.setText("Cancelling Kokoro generation…")
+            self.process.kill()
+
+    def stop_for_shutdown(self):
+        if self.process is not None and self.is_generating:
+            self._cancel_requested = True
+            self.process.kill()
+            self.process.waitForFinished(1500)
+            if self.job is not None:
+                self._finish_failure("Generation cancelled when closing the hub.")
+
+    def open_output_folder(self):
+        if self.last_output is None:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_output.parent)))
