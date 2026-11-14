@@ -23,6 +23,7 @@ from .batch_dialog import BatchNarrationDialog
 from .batch import assign_completed_takes
 from .footage_preview import FootagePreviewDialog
 from .narration_sync import NarrationSyncDialog
+from .thumbnail_browser import ThumbnailBrowserDialog
 from .projects import load_project, new_project, save_project
 from .readiness import analyze_project, export_report
 from .sections import STATUSES, new_section, section_warnings, suggest_footage
@@ -93,6 +94,13 @@ class MainWindow(QMainWindow):
         self.remove_media_button.setEnabled(False)
         self.remove_media_button.clicked.connect(self.remove_selected_media)
         media_controls.addWidget(self.remove_media_button)
+        self.thumbnail_browser_button = QPushButton("Browse Thumbnails…")
+        self.thumbnail_browser_button.setObjectName("browseThumbnailsButton")
+        self.thumbnail_browser_button.setToolTip(
+            "Inspect frames from imported videos; no project changes until Apply Range"
+        )
+        self.thumbnail_browser_button.clicked.connect(self.open_thumbnail_browser)
+        media_controls.addWidget(self.thumbnail_browser_button)
         layout.addLayout(media_controls)
         layout.addWidget(self.media_table, 2)
         self.media_table.itemSelectionChanged.connect(self.update_remove_media_button)
@@ -787,6 +795,78 @@ class MainWindow(QMainWindow):
             f"UNSAVED CHANGES — Updated {current['title']} footage range to "
             f"{start:.3f}–{end:.3f} s after narration comparison. "
             "Source files untouched. Save Project to keep the change."
+        )
+
+    def open_thumbnail_browser(self) -> None:
+        if self.project is None:
+            QMessageBox.information(
+                self, "No project", "Open or create a tutorial project first."
+            )
+            return
+        section = self.selected_section()
+        preferred = section["footage_path"] if section else None
+        try:
+            browser = ThumbnailBrowserDialog(
+                self.project["media"], preferred_path=preferred, parent=self
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.information(self, "Thumbnail browser", str(exc))
+            return
+        if browser.exec() != ThumbnailBrowserDialog.DialogCode.Accepted:
+            return
+        source, moment = browser.selected_source, browser.selected_seconds
+        if source is None or moment is None:
+            return
+        item = next(
+            (ref for ref in self.project["media"]
+             if Path(ref["path"]).expanduser().resolve() == source), None
+        )
+        if item is None or not item.get("kind", "").startswith("Video"):
+            QMessageBox.warning(
+                self, "Recording unavailable", "That recording is no longer in the project."
+            )
+            return
+        selected = self.selected_section()
+        can_apply = bool(selected and
+                         Path(selected["footage_path"]).expanduser().resolve() == source)
+        start = selected["footage_in_seconds"] if can_apply else 0
+        end = selected["footage_out_seconds"] if can_apply else 0
+        try:
+            preview = FootagePreviewDialog(
+                source, item.get("duration_seconds"), start, end, self,
+                seek_seconds=moment, allow_apply=can_apply,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Cannot open preview", str(exc))
+            return
+        selected_id = selected["id"] if can_apply else None
+        if preview.exec() != FootagePreviewDialog.DialogCode.Accepted:
+            self.status_label.setText(
+                f"Previewed {source.name} at {moment:.3f} s. Project unchanged."
+            )
+            return
+        if not can_apply or preview.applied_range is None:
+            return
+        current = self.selected_section()
+        if (current is None or current["id"] != selected_id
+                or Path(current["footage_path"]).expanduser().resolve() != source):
+            QMessageBox.warning(
+                self, "Selection changed",
+                "The selected section or footage changed; range was not applied."
+            )
+            return
+        new_in, new_out = preview.applied_range
+        if ((current["footage_in_seconds"], current["footage_out_seconds"])
+                == (new_in, new_out)):
+            self.status_label.setText("Previewed range is already assigned.")
+            return
+        current["footage_in_seconds"] = new_in
+        current["footage_out_seconds"] = new_out
+        self.show_section(self.section_list.currentRow())
+        self.mark_dirty()
+        self.status_label.setText(
+            f"UNSAVED CHANGES — Source range {new_in:.3f}–{new_out:.3f} s "
+            f"applied to {current['title']}. Original footage untouched."
         )
 
     def preview_footage_range(self) -> None:
